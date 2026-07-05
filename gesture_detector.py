@@ -63,6 +63,40 @@ def _thumb_extended(landmarks, handedness: str) -> bool:
     return tip.x > ip.x
 
 
+def _thumb_extended_vertical(landmarks) -> bool:
+    """Checks if the thumb is extended, regardless of direction, using
+    the same distance-from-wrist idea as _finger_extended (instead of
+    the x-axis check in _thumb_extended, which only works when the
+    thumb sticks out sideways)."""
+    tip = landmarks[THUMB_TIP]
+    ip = landmarks[THUMB_IP]
+    wrist = landmarks[WRIST]
+    return _dist(wrist, tip) > _dist(wrist, ip) * 1.05
+
+
+def _thumb_is_vertical(landmarks, max_horizontal_offset: float = 0.06) -> bool:
+    """Confirms the thumb is oriented roughly vertically (straight up
+    or down) rather than diagonally/sideways, by checking that the tip
+    and IP joint are close together on the x-axis. A vertical thumb
+    is basically a straight vertical line -> tip.x should be close to
+    ip.x. A sideways or diagonal thumb has a bigger x-gap."""
+    tip = landmarks[THUMB_TIP]
+    ip = landmarks[THUMB_IP]
+    return abs(tip.x - ip.x) < max_horizontal_offset
+
+
+def _thumb_far_from_index(landmarks, min_distance: float = 0.15) -> bool:
+    """Checks if the thumb tip is far from the index fingertip. When the
+    other 4 fingers are curled into a fist, the index tip tucks in close
+    to the palm/wrist. A genuinely extended thumb (up or down) sticks
+    away from that curled cluster, so this distance should be large.
+    This captures the whole-hand 'fist + thumb out' shape directly,
+    rather than checking the thumb's own joint alignment in isolation."""
+    tip = landmarks[THUMB_TIP]
+    index_tip = landmarks[FINGER_TIPS["index"]]
+    return _dist(tip, index_tip) > min_distance
+
+
 def _thumb_points_up(landmarks) -> bool:
     return landmarks[THUMB_TIP].y < landmarks[WRIST].y - 0.05
 
@@ -78,15 +112,15 @@ def classify_gesture(landmarks, handedness: str = "Right") -> GestureResult:
     once you have your own dataset (see train_classifier.py in Phase 2).
     """
     fingers_up = {f: _finger_extended(landmarks, f) for f in FINGER_TIPS}
-    thumb_out = _thumb_extended(landmarks, handedness)
+    thumb_out_vertical = _thumb_extended_vertical(landmarks)
     n_extended = sum(fingers_up.values())
 
-    # Thumbs up: thumb extended + pointing up, all other fingers curled
-    if thumb_out and _thumb_points_up(landmarks) and n_extended == 0:
+    # Thumbs up: thumb extended, far from curled index tip, pointing up, other fingers curled
+    if thumb_out_vertical and _thumb_far_from_index(landmarks) and _thumb_points_up(landmarks) and n_extended == 0:
         return GestureResult("thumbs_up", 0.9, landmarks)
 
-    # Thumbs down: thumb extended + pointing down, all other fingers curled
-    if thumb_out and _thumb_points_down(landmarks) and n_extended == 0:
+    # Thumbs down: thumb extended, far from curled index tip, pointing down, other fingers curled
+    if thumb_out_vertical and _thumb_far_from_index(landmarks) and _thumb_points_down(landmarks) and n_extended == 0:
         return GestureResult("thumbs_down", 0.9, landmarks)
 
     # Peace / victory sign: index + middle extended, ring + pinky curled
