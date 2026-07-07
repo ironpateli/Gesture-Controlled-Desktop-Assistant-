@@ -26,9 +26,21 @@ CSV_PATH = "gesture_data.csv"
 MODEL_OUT_PATH = "gesture_model.pkl"
 
 
+def normalize_landmarks_row(row):
+    """Normalize a single row of 63 coordinates: relative to wrist, scaled to max distance 1.0."""
+    coords = row.reshape(21, 3)
+    wrist = coords[0]
+    coords_normalized = coords - wrist
+    max_dist = np.max(np.linalg.norm(coords_normalized, axis=1))
+    if max_dist > 0:
+        coords_normalized = coords_normalized / max_dist
+    return coords_normalized.flatten()
+
+
 def load_data():
     df = pd.read_csv(CSV_PATH)
     X = df.drop(columns=["label"]).values          # 63 numeric feature columns
+    X = np.array([normalize_landmarks_row(row) for row in X])
     y = df["label"].values                          # gesture name strings
     return X, y
 

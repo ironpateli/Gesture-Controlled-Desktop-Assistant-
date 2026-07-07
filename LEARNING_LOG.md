@@ -63,11 +63,26 @@ Since the resume was submitted before Phase 2 was finished, used this framing:
 
 ---
 
-## Phase 2 — Custom dataset + trained classifier (not started yet)
+## Phase 2 — Custom dataset + trained classifier
 
-*(to be filled in as we build it: data collection method, dataset size,
-model architecture, accuracy/confusion matrix, what changed from the
-rule-based version and why)*
+### Technologies & Methods used
+
+| Concept | What it does here | Why chosen / Key advantage |
+|---|---|---|
+| **Landmark Normalization** | Subtracts wrist (landmark 0) from all landmarks; divides all by the maximum landmark distance to the wrist. | Provides **translation-invariance** (hand position in frame doesn't matter) and **scale-invariance** (hand distance to camera doesn't matter). Prevents real-world model confusion. |
+| **GridSearchCV Tuning** | Explores hyperparameter space (capacity, regularization, estimator sizes) using 5-fold cross-validation. | Empirically selects optimal model configurations instead of guessing parameters. |
+| **MLP Classifier** | Multi-layer Perceptron (Neural Network) predicting hand gestures from normalized landmarks. | Achieved **98.36% test accuracy** after normalization (up from 95.67%), outperforming Random Forest (97.01%) and resolving Point vs. Rock confusion. |
+| **Sample Rate Limiter** | Caps recording speed to at most 15 FPS (every 0.066s). | Prevents collecting thousands of identical, redundant frames. Forces user to record diverse hand angles/distances. |
+
+### Things I still need to be able to explain out loud
+- [ ] Why does raw absolute coordinate training cause the model to fail in real life despite high test split scores? (Data leakage/overfitting to absolute image position and distance).
+- [ ] How does vector translation (subtracting $x_0, y_0, z_0$) make the hand origin-centered?
+- [ ] How does scale normalization keep features bounded between -1.0 and 1.0?
+- [ ] Why did normalization benefit the MLP model performance more than the Random Forest model? (Neural networks are highly sensitive to unscaled input features; Random Forests are scale-invariant but benefit from cleaner bounding).
+
+### Environment & Dataset Stats
+- **Dataset Size**: ~6,900 samples across 6 classes (`none`, `peace`, `point`, `rock`, `thumbs_down`, `thumbs_up`).
+- **Classifier Saved**: `gesture_model.pkl` (best-performing MLP configuration).
 
 ---
 

@@ -1,38 +1,77 @@
 """
-debug_thumb.py
+main.py
 
-STANDALONE diagnostic tool — does NOT modify main.py, gesture_detector.py,
-or actions.py in any way. Just imports their existing functions and prints
-live values to the terminal so we can see exactly which condition fails
-when thumbs_up/thumbs_down doesn't fire.
+Phase 2 entry point: webcam -> MediaPipe landmarks -> trained ML classifier
+(gesture_model.pkl from train_classifier.py) -> debounce -> OS action.
 
-Run this instead of main.py, just for debugging:
-    python debug_thumb.py
+Falls back to rule-based classify_gesture() if gesture_model.pkl is not
+found, so Phase 1 still works without retraining.
 
-Press 'q' to quit. Safe to delete this file anytime — it changes nothing
-in the rest of the project.
+Run:
+    python main.py
+
+Press 'q' to quit.
 """
 
-import cv2
-import mediapipe as mp
+import time
+import os
 
-from gesture_detector import (
-    _finger_extended,
-    _thumb_extended_vertical,
-    _thumb_is_vertical,
-    _thumb_far_from_index,
-    _thumb_points_up,
-    _thumb_points_down,
-    FINGER_TIPS,
-)
+import cv2
+import joblib
+import mediapipe as mp
+import numpy as np
+
+from gesture_detector import classify_gesture, Debouncer
+from actions import dispatch
 
 mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+mp_styles = mp.solutions.drawing_styles
+
+MODEL_PATH = "gesture_model.pkl"
+
+
+def load_model():
+    """Load trained model if available, otherwise return None
+    (main loop falls back to rule-based classifier)."""
+    if os.path.exists(MODEL_PATH):
+        model = joblib.load(MODEL_PATH)
+        print(f"[main] Loaded trained model from {MODEL_PATH}")
+        return model
+    print(f"[main] No model found at {MODEL_PATH} — using rule-based classifier.")
+    return None
+
+
+def landmarks_to_features(landmarks):
+    """Flatten 21 MediaPipe landmark objects into a 1x63 numpy array,
+    matching the exact format collect_data.py used to build the dataset."""
+    row = []
+    for lm in landmarks:
+        row += [lm.x, lm.y, lm.z]
+    return np.array(row).reshape(1, -1)
+
+
+def predict_gesture(model, landmarks, handedness):
+    """Use the trained model if available, else fall back to rules."""
+    if model is not None:
+        features = landmarks_to_features(landmarks)
+        return model.predict(features)[0]   # returns a string label e.g. "thumbs_up"
+    # Phase 1 fallback
+    result = classify_gesture(landmarks, handedness)
+    return result.name
 
 
 def main():
+    model = load_model()
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        raise RuntimeError("Could not open webcam.")
+        raise RuntimeError("Could not open webcam. Check camera index / permissions.")
+
+    debouncer = Debouncer(stable_frames=8, cooldown_frames=15)
+    prev_time = time.time()
+
+    mode = "ML model" if model is not None else "Rule-based (Phase 1)"
 
     with mp_hands.Hands(
         model_complexity=1,
@@ -49,40 +88,43 @@ def main():
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = hands.process(rgb)
 
-            y_offset = 30
-            if results.multi_hand_landmarks:
-                landmarks = results.multi_hand_landmarks[0].landmark
+            gesture_name = "none"
 
-                thumb_vert = _thumb_extended_vertical(landmarks)
-                thumb_aligned = _thumb_is_vertical(landmarks)
-                thumb_far = _thumb_far_from_index(landmarks)
-                points_up = _thumb_points_up(landmarks)
-                points_down = _thumb_points_down(landmarks)
-                fingers = {f: _finger_extended(landmarks, f) for f in FINGER_TIPS}
-                n_extended = sum(fingers.values())
+            if results.multi_hand_landmarks and results.multi_handedness:
+                hand_landmarks = results.multi_hand_landmarks[0]
+                handedness = results.multi_handedness[0].classification[0].label
 
-                lines = [
-                    f"thumb_extended_vertical: {thumb_vert}",
-                    f"thumb_is_vertical (aligned): {thumb_aligned}",
-                    f"thumb_far_from_index: {thumb_far}",
-                    f"thumb_points_up: {points_up}",
-                    f"thumb_points_down: {points_down}",
-                    f"n_extended (other 4 fingers): {n_extended}",
-                    f"  index: {fingers['index']}",
-                    f"  middle: {fingers['middle']}",
-                    f"  ring: {fingers['ring']}",
-                    f"  pinky: {fingers['pinky']}",
-                ]
+                mp_drawing.draw_landmarks(
+                    frame,
+                    hand_landmarks,
+                    mp_hands.HAND_CONNECTIONS,
+                    mp_styles.get_default_hand_landmarks_style(),
+                    mp_styles.get_default_hand_connections_style(),
+                )
 
-                for line in lines:
-                    cv2.putText(frame, line, (10, y_offset),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                    y_offset += 25
+                gesture_name = predict_gesture(
+                    model, hand_landmarks.landmark, handedness
+                )
+
+                fired = debouncer.update(gesture_name)
+                if fired:
+                    dispatch(fired)
             else:
-                cv2.putText(frame, "No hand detected", (10, y_offset),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                debouncer.update("none")
 
-            cv2.imshow("DEBUG - thumb values (standalone, safe)", frame)
+            # FPS + mode overlay
+            now = time.time()
+            fps = 1.0 / max(now - prev_time, 1e-6)
+            prev_time = now
+
+            cv2.putText(frame, f"Gesture: {gesture_name}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            cv2.putText(frame, f"FPS: {fps:.1f}", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            cv2.putText(frame, f"Mode: {mode}", (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 255), 1)
+
+            cv2.imshow("Gesture Assistant (Phase 2 - Trained Classifier)", frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break

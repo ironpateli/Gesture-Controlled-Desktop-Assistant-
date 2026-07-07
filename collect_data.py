@@ -77,6 +77,10 @@ def main():
     current_label = None
     recording = False
     counts = {label: 0 for label in KEY_TO_LABEL.values()}
+    
+    # Save interval in seconds to limit data rate (0.066s = ~15 FPS, halving the standard 30 FPS)
+    SAVE_INTERVAL = 0.066
+    last_save_time = 0
 
     # If the CSV already has data from a previous session, show accurate
     # starting counts instead of resetting to 0 (helps you see total progress).
@@ -114,9 +118,12 @@ def main():
                 )
 
                 if recording and current_label is not None:
-                    row = landmarks_to_row(current_label, hand_landmarks.landmark)
-                    writer.writerow(row)
-                    counts[current_label] += 1
+                    now = time.time()
+                    if now - last_save_time >= SAVE_INTERVAL:
+                        row = landmarks_to_row(current_label, hand_landmarks.landmark)
+                        writer.writerow(row)
+                        counts[current_label] += 1
+                        last_save_time = now
 
             # --- overlay UI ---
             status = "RECORDING" if recording else "PAUSED"
