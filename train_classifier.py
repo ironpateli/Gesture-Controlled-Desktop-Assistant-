@@ -97,7 +97,7 @@ def main():
     # Initialize model
     model = GestureLSTM(input_size=INPUT_SIZE, hidden_size=64, num_classes=num_classes)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     # Train loop
     epochs = 40

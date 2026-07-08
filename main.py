@@ -37,7 +37,7 @@ mp_styles = mp.solutions.drawing_styles
 MODEL_PATH = "gesture_model.pth"
 SEQ_LEN = 20
 INPUT_SIZE = 63
-CONFIDENCE_THRESHOLD = 0.80  # Predictions below this are auto-classified as 'none'
+CONFIDENCE_THRESHOLD = 0.8  # Predictions below this are auto-classified as 'none'
 
 
 class GestureLSTM(nn.Module):
@@ -207,13 +207,13 @@ def main():
                             # Discrete static gestures (Mute, Play/Pause)
                             elif gesture_name in ("fist", "peace"):
                                 dispatch(gesture_name)
-                                cooldown = 20  # Medium cooldown (~0.5s)
+                                cooldown = 30  # Medium cooldown (~0.5s)
                                 raw_buffer.clear()  # Clear buffer to prevent double-firing
                             
                             # Dynamic motion gestures (Swiping / Scrolling)
                             elif gesture_name in ("swipe_left", "swipe_right", "swipe_up", "swipe_down"):
                                 dispatch(gesture_name)
-                                cooldown = 25  # 0.6s repositioning cooldown
+                                cooldown = 30  # 0.6s repositioning cooldown
                                 raw_buffer.clear()  # Discard old swipe frames to prevent double-firing
                 else:
                     # Phase 1 fallback (rule-based single frame prediction)

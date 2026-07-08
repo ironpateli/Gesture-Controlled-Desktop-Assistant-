@@ -126,7 +126,7 @@ def do_swipe_up():
     Option 2: uncomment _focus_last_window() line below instead."""
     print("[ACTION] Swipe up → scroll up")
     # _focus_last_window()  # Option 2: uncomment this line
-    pyautogui.scroll(5)
+    pyautogui.scroll(200)
 
 
 def do_swipe_down():
@@ -135,7 +135,7 @@ def do_swipe_down():
     Option 2: uncomment _focus_last_window() line below instead."""
     print("[ACTION] Swipe down → scroll down")
     # _focus_last_window()  # Option 2: uncomment this line
-    pyautogui.scroll(-5)
+    pyautogui.scroll(-200)
 
 
 GESTURE_ACTION_MAP = {
