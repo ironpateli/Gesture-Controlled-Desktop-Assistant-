@@ -1,11 +1,11 @@
 """
 main.py
 
-Phase 2 entry point: webcam -> MediaPipe landmarks -> trained PyTorch LSTM classifier
+Entry point: webcam -> MediaPipe landmarks -> trained PyTorch LSTM classifier
 (gesture_model.pth from train_classifier.py) -> custom debounce -> OS action.
 
-Falls back to rule-based classify_gesture() if gesture_model.pth is not
-found, so Phase 1 still works without retraining.
+Requires gesture_model.pth to be present — there is no rule-based fallback.
+Run this from the same directory as your trained gesture_model.pth.
 
 Run:
     python main.py
@@ -23,9 +23,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import mediapipe as mp
-
-
-from gesture_detector import classify_gesture
 
 from actions import dispatch, setup_always_on_top
 
@@ -92,30 +89,29 @@ def normalize_sequence_frame(landmarks, wrist_0, scale_factor, is_left_hand=Fals
 
 
 def load_model():
-    """Load trained PyTorch LSTM model if available, otherwise return None
-    (main loop falls back to rule-based classifier)."""
-    if os.path.exists(MODEL_PATH):
-        try:
-            checkpoint = torch.load(MODEL_PATH)
-            label_to_id = checkpoint['label_to_id']
-            id_to_label = checkpoint['id_to_label']
-            num_classes = len(label_to_id)
-            
-            model = GestureLSTM(
-                input_size=INPUT_SIZE,
-                hidden_size=checkpoint.get('hidden_size', 64),
-                num_classes=num_classes,
-                num_layers=checkpoint.get('num_layers', 1)
-            )
-            model.load_state_dict(checkpoint['model_state_dict'])
-            model.eval()
-            print(f"[main] Loaded trained PyTorch LSTM model from {MODEL_PATH}")
-            return model, id_to_label
-        except Exception as e:
-            print(f"[main] Error loading PyTorch model: {e}")
-            return None, None
-    print(f"[main] No model found at {MODEL_PATH} — using rule-based classifier.")
-    return None, None
+    """Load the trained PyTorch LSTM model. Raises if it can't be found or
+    loaded — there is no rule-based fallback, so a valid model is required."""
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(
+            f"[main] No model found at {MODEL_PATH}. Place your trained "
+            f"gesture_model.pth next to main.py before running."
+        )
+
+    checkpoint = torch.load(MODEL_PATH)
+    label_to_id = checkpoint['label_to_id']
+    id_to_label = checkpoint['id_to_label']
+    num_classes = len(label_to_id)
+
+    model = GestureLSTM(
+        input_size=INPUT_SIZE,
+        hidden_size=checkpoint.get('hidden_size', 64),
+        num_classes=num_classes,
+        num_layers=checkpoint.get('num_layers', 1)
+    )
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    print(f"[main] Loaded trained PyTorch LSTM model from {MODEL_PATH}")
+    return model, id_to_label
 
 
 def main():
@@ -130,7 +126,7 @@ def main():
     cooldown = 0
     prev_time = time.time()
 
-    mode = "PyTorch LSTM model" if model is not None else "Rule-based (Phase 1)"
+    mode = "PyTorch LSTM model"
 
     with mp_hands.Hands(
         model_complexity=1,
@@ -166,63 +162,54 @@ def main():
                     mp_styles.get_default_hand_connections_style(),
                 )
 
-                if model is not None:
-                    # Append current frame to sliding window buffer
-                    raw_buffer.append((hand_landmarks.landmark, is_left_hand))
+                # Append current frame to sliding window buffer
+                raw_buffer.append((hand_landmarks.landmark, is_left_hand))
 
-                    if cooldown > 0:
-                        cooldown -= 1
-                        gesture_name = "none"
-                    elif len(raw_buffer) == SEQ_LEN:
-                        # Reconstruct sliding sequence normalized to raw_buffer[0]
-                        landmarks_0, is_left_0 = raw_buffer[0]
-                        wrist_0 = landmarks_0[0]
-                        scale_factor = calculate_scale_factor(landmarks_0)
+                if cooldown > 0:
+                    cooldown -= 1
+                    gesture_name = "none"
+                elif len(raw_buffer) == SEQ_LEN:
+                    # Reconstruct sliding sequence normalized to raw_buffer[0]
+                    landmarks_0, is_left_0 = raw_buffer[0]
+                    wrist_0 = landmarks_0[0]
+                    scale_factor = calculate_scale_factor(landmarks_0)
 
-                        normalized_seq = []
-                        for landmarks_t, is_left_t in raw_buffer:
-                            flat_frame = normalize_sequence_frame(
-                                landmarks_t, wrist_0, scale_factor, is_left_hand=is_left_t
-                            )
-                            normalized_seq.append(flat_frame)
+                    normalized_seq = []
+                    for landmarks_t, is_left_t in raw_buffer:
+                        flat_frame = normalize_sequence_frame(
+                            landmarks_t, wrist_0, scale_factor, is_left_hand=is_left_t
+                        )
+                        normalized_seq.append(flat_frame)
 
-                        # Predict using LSTM
-                        tensor_in = torch.tensor([normalized_seq], dtype=torch.float32)
-                        with torch.no_grad():
-                            outputs = model(tensor_in)
-                            probs = torch.softmax(outputs, dim=1)
-                            confidence, pred_id = torch.max(probs, dim=1)
-                            if confidence.item() >= CONFIDENCE_THRESHOLD:
-                                gesture_name = id_to_label[pred_id.item()]
-                            else:
-                                gesture_name = "none"  # below threshold, reject
+                    # Predict using LSTM
+                    tensor_in = torch.tensor([normalized_seq], dtype=torch.float32)
+                    with torch.no_grad():
+                        outputs = model(tensor_in)
+                        probs = torch.softmax(outputs, dim=1)
+                        confidence, pred_id = torch.max(probs, dim=1)
+                        if confidence.item() >= CONFIDENCE_THRESHOLD:
+                            gesture_name = id_to_label[pred_id.item()]
+                        else:
+                            gesture_name = "none"  # below threshold, reject
 
-                        # Dispatch Action with Custom Cooldowns
-                        if gesture_name != "none":
-                            # Continuous static gestures (Thumbs Up / Down for Volume)
-                            if gesture_name in ("thumbs_up", "thumbs_down"):
-                                dispatch(gesture_name)
-                                cooldown = 4  # Short cooldown to allow continuous smooth trigger
-                            
-                            # Discrete static gestures (Mute, Play/Pause)
-                            elif gesture_name in ("fist", "peace"):
-                                dispatch(gesture_name)
-                                cooldown = 30  # Medium cooldown (~0.5s)
-                                raw_buffer.clear()  # Clear buffer to prevent double-firing
-                            
-                            # Dynamic motion gestures (Swiping / Scrolling)
-                            elif gesture_name in ("swipe_left", "swipe_right", "swipe_up", "swipe_down"):
-                                dispatch(gesture_name)
-                                cooldown = 30  # 0.6s repositioning cooldown
-                                raw_buffer.clear()  # Discard old swipe frames to prevent double-firing
-                else:
-                    # Phase 1 fallback (rule-based single frame prediction)
-                    gesture_name = classify_gesture(hand_landmarks.landmark, handedness).name
-                    # Fallback has no fancy state machine cooldown, but we can run a simple dispatch
-                    # for debugging/backward compatibility.
+                    # Dispatch Action with Custom Cooldowns
                     if gesture_name != "none":
-                        dispatch(gesture_name)
-                        cooldown = 9  # simple print delay
+                        # Continuous static gestures (Thumbs Up / Down for Volume)
+                        if gesture_name in ("thumbs_up", "thumbs_down"):
+                            dispatch(gesture_name)
+                            cooldown = 4  # Short cooldown to allow continuous smooth trigger
+
+                        # Discrete static gestures (Mute, Play/Pause)
+                        elif gesture_name in ("fist", "peace"):
+                            dispatch(gesture_name)
+                            cooldown = 30  # Medium cooldown (~0.5s)
+                            raw_buffer.clear()  # Clear buffer to prevent double-firing
+
+                        # Dynamic motion gestures (Swiping / Scrolling)
+                        elif gesture_name in ("swipe_left", "swipe_right", "swipe_up", "swipe_down"):
+                            dispatch(gesture_name)
+                            cooldown = 30  # 0.6s repositioning cooldown
+                            raw_buffer.clear()  # Discard old swipe frames to prevent double-firing
             else:
                 raw_buffer.clear()
                 if cooldown > 0:

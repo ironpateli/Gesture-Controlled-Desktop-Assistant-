@@ -2,9 +2,24 @@
 actions.py
 
 Decoupled action-dispatch layer: gesture name -> OS-level action.
-Updated for Phase 2 gesture set:
-  Static:  thumbs_up, thumbs_down, fist, peace
-  Motion:  swipe_left, swipe_right, swipe_up, swipe_down
+
+Actions are no longer hardcoded — they're read from gestures_config.json
+(same folder as this file). Each gesture maps to an entry like:
+
+    "swipe_right": {"type": "uri", "target": "spotify:", "label": "Spotify"}
+
+Supported "type" values:
+    builtin  - one of the actions in BUILTIN_ACTIONS below
+               (volume_up, volume_down, mute, play_pause,
+                scroll_up, scroll_down, prev_tab, next_tab)
+    uri      - a Windows URI protocol handler, e.g. "spotify:", "ms-settings:"
+    path     - a direct path to an .exe (or any executable)
+    script   - a path to a .py / .bat / .cmd / .ps1 file to run
+    hotkey   - a list of keys to send together, e.g. ["ctrl", "shift", "s"]
+
+If gestures_config.json is missing, a default one (matching the original
+behavior) is created automatically on first run. A future config GUI will
+read/write this same file — no code changes needed to remap a gesture.
 
 Focus problem: OpenCV window steals focus from the browser, so
 window-dependent actions (Ctrl+Tab, scroll) need focus management.
@@ -17,10 +32,33 @@ To use Option 2 instead:
   Uncomment Option 2 blocks below, comment out Option 3 blocks.
 """
 
+import os
+import sys
+import json
 import time
+import subprocess
 import pyautogui
 
 pyautogui.FAILSAFE = True  # move mouse to screen corner to abort
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "gestures_config.json")
+SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")  # uploaded scripts land here (GUI phase)
+
+DEFAULT_CONFIG = {
+    "thumbs_up":   {"type": "builtin", "target": "volume_up",   "label": "Volume Up"},
+    "thumbs_down": {"type": "builtin", "target": "volume_down", "label": "Volume Down"},
+    "fist":        {"type": "builtin", "target": "mute",        "label": "Mute Toggle"},
+    "peace":       {"type": "builtin", "target": "play_pause",  "label": "Play/Pause"},
+    "swipe_left":  {"type": "builtin", "target": "prev_tab",    "label": "Previous Tab"},
+    "swipe_right": {"type": "uri",     "target": "spotify:",    "label": "Spotify"},
+    "swipe_up":    {"type": "uri",     "target": "ms-settings:","label": "Settings"},
+    "swipe_down":  {"type": "builtin", "target": "scroll_down", "label": "Scroll Down"},
+}
+
+# The fixed set of gestures the model recognizes. config_gui.py builds its
+# rows from this rather than hardcoding the list a second time.
+GESTURE_NAMES = list(DEFAULT_CONFIG.keys())
 
 # ============================================================
 # OPTION 3 — Always-on-top window (active)
@@ -74,85 +112,194 @@ def setup_always_on_top(window_title: str):
 #     time.sleep(0.15)
 
 
-# --- Static gestures (OS-level keys, no focus needed) ---
+# ============================================================
+# BUILT-IN ACTIONS — the "type": "builtin" targets
+# ============================================================
 
-def do_thumbs_up():
-    """Volume up — global OS key, always works regardless of focus."""
+def _volume_up():
     print("[ACTION] Volume up")
     pyautogui.press("volumeup")
 
 
-def do_thumbs_down():
-    """Volume down — global OS key, always works regardless of focus."""
+def _volume_down():
     print("[ACTION] Volume down")
     pyautogui.press("volumedown")
 
 
-def do_fist():
-    """Mute / unmute — global OS key, always works regardless of focus."""
+def _mute():
     print("[ACTION] Mute toggle")
     pyautogui.press("volumemute")
 
 
-def do_peace():
-    """Play / pause — global OS media key, always works regardless of focus."""
+def _play_pause():
     print("[ACTION] Play/Pause")
     pyautogui.press("playpause")
 
 
-# --- Motion gestures (window-dependent — need focus management) ---
-
-def do_swipe_left():
-    """Previous browser tab.
-    Option 3: works if always-on-top is set (browser retains focus).
-    Option 2: uncomment _focus_last_window() line below instead."""
-    print("[ACTION] Swipe left → previous tab")
+def _prev_tab():
+    print("[ACTION] Previous tab")
     # _focus_last_window()  # Option 2: uncomment this line
     pyautogui.hotkey("ctrl", "shift", "tab")
 
 
-def do_swipe_right():
-    """Next browser tab.
-    Option 3: works if always-on-top is set (browser retains focus).
-    Option 2: uncomment _focus_last_window() line below instead."""
-    print("[ACTION] Swipe right → next tab")
+def _next_tab():
+    print("[ACTION] Next tab")
     # _focus_last_window()  # Option 2: uncomment this line
     pyautogui.hotkey("ctrl", "tab")
 
 
-def do_swipe_up():
-    """Scroll up.
-    Option 3: works if always-on-top is set (browser retains focus).
-    Option 2: uncomment _focus_last_window() line below instead."""
-    print("[ACTION] Swipe up → scroll up")
+def _scroll_up():
+    print("[ACTION] Scroll up")
     # _focus_last_window()  # Option 2: uncomment this line
     pyautogui.scroll(200)
 
 
-def do_swipe_down():
-    """Scroll down.
-    Option 3: works if always-on-top is set (browser retains focus).
-    Option 2: uncomment _focus_last_window() line below instead."""
-    print("[ACTION] Swipe down → scroll down")
+def _scroll_down():
+    print("[ACTION] Scroll down")
     # _focus_last_window()  # Option 2: uncomment this line
     pyautogui.scroll(-200)
 
 
-GESTURE_ACTION_MAP = {
-    "thumbs_up":   do_thumbs_up,
-    "thumbs_down": do_thumbs_down,
-    "fist":        do_fist,
-    "peace":       do_peace,
-    "swipe_left":  do_swipe_left,
-    "swipe_right": do_swipe_right,
-    "swipe_up":    do_swipe_up,
-    "swipe_down":  do_swipe_down,
+# Registry the config GUI will offer as dropdown choices later.
+BUILTIN_ACTIONS = {
+    "volume_up":   _volume_up,
+    "volume_down": _volume_down,
+    "mute":        _mute,
+    "play_pause":  _play_pause,
+    "prev_tab":    _prev_tab,
+    "next_tab":    _next_tab,
+    "scroll_up":   _scroll_up,
+    "scroll_down": _scroll_down,
 }
 
 
+# ============================================================
+# ACTION RUNNERS — one per config "type"
+# ============================================================
+
+def _run_builtin(target: str):
+    fn = BUILTIN_ACTIONS.get(target)
+    if not fn:
+        print(f"[actions] Unknown builtin action '{target}'. "
+              f"Valid options: {list(BUILTIN_ACTIONS.keys())}")
+        return
+    fn()
+
+
+def _run_uri(target: str):
+    print(f"[ACTION] Open URI: {target}")
+    try:
+        os.startfile(target)
+    except OSError as e:
+        print(f"[actions] Failed to open URI '{target}': {e}")
+
+
+def _run_path(target: str):
+    print(f"[ACTION] Launch: {target}")
+    if not os.path.exists(target):
+        print(f"[actions] Path not found: {target}")
+        return
+    try:
+        subprocess.Popen([target])
+    except OSError as e:
+        print(f"[actions] Failed to launch '{target}': {e}")
+
+
+def _run_script(target: str):
+    print(f"[ACTION] Run script: {target}")
+    if not os.path.exists(target):
+        print(f"[actions] Script not found: {target}")
+        return
+    ext = os.path.splitext(target)[1].lower()
+    try:
+        if ext == ".py":
+            subprocess.Popen([sys.executable, target])
+        elif ext == ".ps1":
+            subprocess.Popen(["powershell", "-ExecutionPolicy", "Bypass", "-File", target])
+        elif ext in (".bat", ".cmd"):
+            subprocess.Popen([target], shell=True)
+        else:
+            # Fall back to letting Windows figure out the file association.
+            os.startfile(target)
+    except OSError as e:
+        print(f"[actions] Failed to run script '{target}': {e}")
+
+
+def _run_hotkey(target):
+    if isinstance(target, str):
+        target = [target]
+    print(f"[ACTION] Hotkey: {'+'.join(target)}")
+    try:
+        pyautogui.hotkey(*target)
+    except Exception as e:
+        print(f"[actions] Failed to send hotkey {target}: {e}")
+
+
+ACTION_RUNNERS = {
+    "builtin": _run_builtin,
+    "uri":     _run_uri,
+    "path":    _run_path,
+    "script":  _run_script,
+    "hotkey":  _run_hotkey,
+}
+
+
+# ============================================================
+# CONFIG LOADING
+# ============================================================
+
+def _write_default_config():
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(DEFAULT_CONFIG, f, indent=2)
+    print(f"[actions] Created default config at {CONFIG_PATH}")
+
+
+def load_config() -> dict:
+    """Load gestures_config.json, creating it with defaults if missing
+    or unreadable. Called fresh on every dispatch so external edits
+    (e.g. from a future config GUI) are picked up without a restart."""
+    if not os.path.exists(CONFIG_PATH):
+        _write_default_config()
+        return dict(DEFAULT_CONFIG)
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[actions] Failed to read {CONFIG_PATH} ({e}) — using defaults.")
+        return dict(DEFAULT_CONFIG)
+
+
+def save_config(config: dict):
+    """Write the full gesture->action config to disk. Writes to a temp
+    file first and replaces atomically so a crash mid-write (or main.py
+    reading concurrently) can't leave a corrupted/half-written file."""
+    tmp_path = CONFIG_PATH + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(config, f, indent=2)
+    os.replace(tmp_path, CONFIG_PATH)
+
+
+# ============================================================
+# DISPATCH
+# ============================================================
+
 def dispatch(gesture_name: str):
-    action = GESTURE_ACTION_MAP.get(gesture_name)
-    if action:
-        action()
-    else:
-        print(f"[dispatch] No action mapped for gesture: '{gesture_name}'")
+    config = load_config()
+    entry = config.get(gesture_name)
+
+    if not entry:
+        print(f"[dispatch] No action configured for gesture: '{gesture_name}'")
+        return
+
+    action_type = entry.get("type")
+    target = entry.get("target")
+    runner = ACTION_RUNNERS.get(action_type)
+
+    if not runner:
+        print(f"[dispatch] Unknown action type '{action_type}' for gesture '{gesture_name}'")
+        return
+    if target is None:
+        print(f"[dispatch] No target set for gesture '{gesture_name}'")
+        return
+
+    runner(target)
