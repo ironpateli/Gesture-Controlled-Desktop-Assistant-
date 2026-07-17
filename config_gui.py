@@ -117,9 +117,10 @@ def describe_entry(entry: dict) -> str:
         return "(unassigned)"
     action_type = entry.get("type")
     label = entry.get("label")
+    prefix = "Disabled - " if not actions.is_gesture_enabled(entry) else ""
     if label:
-        return f"{label}  [{action_type}]"
-    return f"{entry.get('target', '?')}  [{action_type}]"
+        return f"{prefix}{label}  [{action_type}]"
+    return f"{prefix}{entry.get('target', '?')}  [{action_type}]"
 
 
 # ============================================================
@@ -344,6 +345,7 @@ class EditGestureDialog(tk.Toplevel):
                 return
             entry = {"type": "hotkey", "target": self.hotkey_keys, "label": "+".join(self.hotkey_keys)}
 
+        entry["enabled"] = actions.is_gesture_enabled(self._current_entry)
         self.on_save(self.gesture_name, entry)
         self.destroy()
 
@@ -355,8 +357,8 @@ class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Gesture Assistant — Configure Actions")
-        self.geometry("520x480")
-        self.minsize(420, 320)
+        self.geometry("600x480")
+        self.minsize(500, 320)
         self.configure(bg=COLOR_BG)
 
         # --- Header ---
@@ -402,6 +404,7 @@ class ConfigGUI(tk.Tk):
                   ).pack()
 
         self._row_labels = {}
+        self._enabled_vars = {}
         self._build_rows()
 
     def _on_mousewheel(self, event):
@@ -414,6 +417,7 @@ class ConfigGUI(tk.Tk):
         config = actions.load_config()
 
         for gesture_name in actions.GESTURE_NAMES:
+            entry = config.get(gesture_name, {})
             # A bordered "card" per gesture so rows are visually distinct
             # from the page background instead of blending together.
             row = tk.Frame(self.rows_frame, bg=COLOR_ROW_BG, highlightbackground=COLOR_ROW_BORDER,
@@ -424,15 +428,36 @@ class ConfigGUI(tk.Tk):
                      bg=COLOR_ROW_BG, fg=COLOR_TEXT, font=("Segoe UI", 10, "bold")
                      ).pack(side="left", padx=(10, 4), pady=10)
 
-            desc_var = tk.StringVar(value=describe_entry(config.get(gesture_name)))
+            desc_var = tk.StringVar(value=describe_entry(entry))
             self._row_labels[gesture_name] = desc_var
             tk.Label(row, textvariable=desc_var, anchor="w", bg=COLOR_ROW_BG, fg=COLOR_TEXT_MUTED
                      ).pack(side="left", fill="x", expand=True, pady=10)
+
+            enabled_var = tk.BooleanVar(value=actions.is_gesture_enabled(entry))
+            self._enabled_vars[gesture_name] = enabled_var
+            tk.Checkbutton(
+                row,
+                text="Enabled",
+                variable=enabled_var,
+                command=lambda g=gesture_name, v=enabled_var: self._toggle_enabled(g, v),
+                bg=COLOR_ROW_BG,
+                fg=COLOR_TEXT,
+                selectcolor=COLOR_ROW_BG,
+                activebackground=COLOR_ROW_BG,
+            ).pack(side="right", padx=(4, 2), pady=10)
 
             tk.Button(row, text="Edit", command=lambda g=gesture_name: self._edit(g),
                       bg=COLOR_ACCENT_BLUE, fg="white", relief="flat",
                       activebackground="#3651c9", cursor="hand2", padx=10
                       ).pack(side="right", padx=10, pady=10)
+
+    def _toggle_enabled(self, gesture_name, enabled_var):
+        config = actions.load_config()
+        entry = dict(config.get(gesture_name) or actions.DEFAULT_CONFIG[gesture_name])
+        entry["enabled"] = bool(enabled_var.get())
+        config[gesture_name] = entry
+        actions.save_config(config)
+        self._row_labels[gesture_name].set(describe_entry(entry))
 
     def _edit(self, gesture_name):
         config = actions.load_config()
@@ -444,6 +469,7 @@ class ConfigGUI(tk.Tk):
         config[gesture_name] = entry
         actions.save_config(config)
         self._row_labels[gesture_name].set(describe_entry(entry))
+        self._enabled_vars[gesture_name].set(actions.is_gesture_enabled(entry))
 
     def _refresh_apps(self):
         app_discovery.discover_apps(force_refresh=True)

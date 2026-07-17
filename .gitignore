@@ -3,4 +3,5 @@ __pycache__/
 gesture_screenshot.png
 build/
 dist/
+release/
 *.spec.bak

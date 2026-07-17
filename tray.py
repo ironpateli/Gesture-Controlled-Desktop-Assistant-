@@ -114,6 +114,14 @@ def _engine_running() -> bool:
     return _engine_thread is not None and _engine_thread.is_alive()
 
 
+def _notify(icon, message: str):
+    """Show a best-effort Windows notification without risking the tray app."""
+    try:
+        icon.notify(message, "Gesture Assistant")
+    except Exception as exc:
+        print(f"[tray] Could not show notification: {exc}")
+
+
 def _start_engine(icon):
     global _engine_thread, _engine_stop_event
 
@@ -124,28 +132,50 @@ def _start_engine(icon):
         stop_event = _engine_stop_event
 
         def runner():
+            engine_ready = False
+
+            def on_ready():
+                nonlocal engine_ready
+                engine_ready = True
+                icon.icon = _get_icon_image(active=True)
+                icon.title = "Gesture Assistant (running)"
+                icon.update_menu()
+                print("[tray] Gesture engine ready.")
+                _notify(icon, "Gesture recognition started.")
+
             try:
                 import main as gesture_main
 
-                gesture_main.run_gesture_engine(stop_event, _preview_enabled)
+                gesture_main.run_gesture_engine(
+                    stop_event,
+                    _preview_enabled,
+                    ready_callback=on_ready,
+                )
+                if engine_ready and not stop_event.is_set():
+                    _notify(icon, "Gesture recognition stopped unexpectedly.")
             except Exception as e:
                 print(f"[tray] Gesture engine stopped with an error: {e}")
+                if engine_ready:
+                    message = f"Gesture recognition stopped: {e}"
+                else:
+                    message = f"Could not start gesture recognition: {e}"
+                _notify(icon, message)
             finally:
                 icon.icon = _get_icon_image(active=False)
                 icon.title = "Gesture Assistant (stopped)"
                 icon.update_menu()
 
         _engine_thread = threading.Thread(target=runner, daemon=True, name="gesture-engine")
-        icon.icon = _get_icon_image(active=True)
-        icon.title = "Gesture Assistant (running)"
+        icon.icon = _get_icon_image(active=False)
+        icon.title = "Gesture Assistant (starting)"
         _engine_thread.start()
 
-    print("[tray] Gesture engine started.")
+    print("[tray] Gesture engine starting.")
     if _engine_running():
         icon.update_menu()
 
 
-def _stop_engine(icon, wait: bool = True):
+def _stop_engine(icon, wait: bool = True, notify: bool = True):
     global _engine_thread
 
     with _engine_lock:
@@ -157,10 +187,16 @@ def _stop_engine(icon, wait: bool = True):
     if wait:
         thread.join(timeout=5)
 
+    if thread.is_alive():
+        print("[tray] Gesture engine is still stopping.")
+        return
+
     print("[tray] Gesture engine stopped.")
     icon.icon = _get_icon_image(active=False)
     icon.title = "Gesture Assistant (stopped)"
     icon.update_menu()
+    if notify:
+        _notify(icon, "Gesture recognition stopped.")
 
 
 def _toggle_engine(icon, item):
@@ -237,7 +273,7 @@ def _on_configure(icon, item):
 
 
 def _exit_app(icon, item):
-    _stop_engine(icon)
+    _stop_engine(icon, notify=False)
     print("[tray] Exiting Gesture Assistant.")
     icon.stop()
 

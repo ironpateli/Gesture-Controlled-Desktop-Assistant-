@@ -1,24 +1,39 @@
 # PyInstaller definition for the distributable Windows application.
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_data_files
 
-mediapipe_datas, mediapipe_binaries, mediapipe_hiddenimports = collect_all("mediapipe")
+mediapipe_datas = collect_data_files(
+    "mediapipe",
+    includes=[
+        "modules/hand_landmark/**",
+        "modules/palm_detection/**",
+    ],
+)
 
 a = Analysis(
     ["tray.py"],
     pathex=[],
-    binaries=mediapipe_binaries,
+    binaries=[],
     datas=mediapipe_datas
     + [
-        ("gesture_model.pth", "."),
+        ("gesture_model_runtime.npz", "."),
         ("tray_icon_active.png", "."),
         ("tray_icon_inactive.png", "."),
     ],
-    hiddenimports=mediapipe_hiddenimports + ["win32timezone"],
+    hiddenimports=["win32timezone"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pandas", "sklearn"],
+    excludes=[
+        "jax",
+        "jaxlib",
+        "onnxruntime",
+        "pandas",
+        "scipy",
+        "sklearn",
+        "sounddevice",
+        "torch",
+    ],
     noarchive=False,
     optimize=0,
 )
