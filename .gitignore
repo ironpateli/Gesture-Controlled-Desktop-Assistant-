@@ -1,6 +1,10 @@
 venv/
 __pycache__/
+.agents/
 gesture_screenshot.png
+app_cache.json
+gestures_config.json
+scripts/
 build/
 dist/
 release/

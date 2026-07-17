@@ -77,6 +77,8 @@ You can also run `python main.py` to test the camera engine directly or `python 
 
 Each sample contains 20 frames x 21 landmarks x 3 coordinates (1,260 features). Pose landmarks are wrist-relative and scale-normalized; left-hand poses are mirrored to match right-hand orientation. Wrist displacement across the sequence is retained so the LSTM can learn motion.
 
+The retained training baseline is shown in [docs/assets/lstm-training-baseline.png](docs/assets/lstm-training-baseline.png). It records the earlier 96.04% sequence test accuracy and confusion matrix for comparison during the next model-improvement cycle.
+
 ## Main files
 
 - `tray.py`: persistent tray process and camera start/stop control.
@@ -89,7 +91,9 @@ Each sample contains 20 frames x 21 landmarks x 3 coordinates (1,260 features). 
 - `train_classifier.py`: LSTM training and evaluation.
 - `export_runtime_model.py`: exports and verifies the lightweight runtime model.
 - `runtime_model.py`: NumPy implementation of the trained one-layer LSTM.
-- `gesture_detector.py` and `gesture_model.pkl`: retained Phase 1/early Phase 2 artifacts; they are not used by the active runtime.
+- `archive/phase1/gesture_detector.py` and `archive/phase1/gesture_model.pkl`: retained Phase 1/early Phase 2 artifacts; they are not used by the active runtime.
+
+Generated build directories, the local venv, app-discovery cache, personal gesture mappings, and uploaded user scripts are intentionally excluded from Git. `build_app.ps1` and `build_installer.ps1` recreate distributable outputs when needed.
 
 ## Build the Windows application
 

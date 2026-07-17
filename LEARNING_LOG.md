@@ -150,6 +150,7 @@ This is enough to exercise the full pipeline, but the class imbalance should be 
 - Application binaries and writable settings need separate lifecycles. The installer places binaries under `%LOCALAPPDATA%\Programs\Gesture Assistant`, while gesture mappings live under `%LOCALAPPDATA%\GestureAssistant`; reinstalling the executable must not erase a user's configuration.
 - Installer `0.1.1` replaced legacy Desktop and Start Menu shortcuts after an older shortcut resolved to a development executable. The installer now deletes old links and recreates them with the actual installation directory as both target and working directory.
 - A private beta can be shared as one Inno Setup executable through Google Drive. The SHA-256 value is a deterministic fingerprint for detecting a changed or corrupted download; the installer itself remains outside normal Git history.
+- After publishing a recovery checkpoint, generated `build`/`dist` output, the superseded installer, caches, and personal runtime configuration were removed from the workspace. Legacy Phase 1 code and weights were moved under `archive/phase1`, while the LSTM baseline image was retained under `docs/assets` for future model comparisons.
 
 ### Dependency and configuration lessons
 
