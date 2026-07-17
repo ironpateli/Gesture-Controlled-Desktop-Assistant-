@@ -1,3 +1,6 @@
 venv/
 __pycache__/
 gesture_screenshot.png
+build/
+dist/
+*.spec.bak

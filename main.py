@@ -1,20 +1,25 @@
 """
 main.py
 
-Entry point: webcam -> MediaPipe landmarks -> trained PyTorch LSTM classifier
-(gesture_model.pth from train_classifier.py) -> custom debounce -> OS action.
+Camera engine: webcam -> MediaPipe landmarks -> trained PyTorch LSTM
+classifier (gesture_model.pth from train_classifier.py) -> custom
+debounce -> OS action.
+
+This module no longer runs on its own by default — tray.py is the
+entry point. The tray icon starts/stops run_gesture_engine() below on
+demand, so the camera only turns on when you actually want it to.
 
 Requires gesture_model.pth to be present — there is no rule-based fallback.
 Run this from the same directory as your trained gesture_model.pth.
 
-Run:
+To run the camera loop standalone for testing (no tray icon, no
+start/stop control — just Ctrl+C or 'q' to quit):
     python main.py
-
-Press 'q' to quit.
 """
 
 import time
 import os
+import threading
 import collections
 import math
 import warnings
@@ -25,16 +30,18 @@ import torch.nn as nn
 import mediapipe as mp
 
 from actions import dispatch, setup_always_on_top
+from app_paths import resource_path
 
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 mp_styles = mp.solutions.drawing_styles
 
-MODEL_PATH = "gesture_model.pth"
+MODEL_PATH = resource_path("gesture_model.pth")
 SEQ_LEN = 20
 INPUT_SIZE = 63
 CONFIDENCE_THRESHOLD = 0.8  # Predictions below this are auto-classified as 'none'
+WINDOW_TITLE = "Gesture Assistant (Phase 2 - PyTorch LSTM)"
 
 
 class GestureLSTM(nn.Module):
@@ -114,7 +121,15 @@ def load_model():
     return model, id_to_label
 
 
-def main():
+def run_gesture_engine(
+    stop_event: threading.Event,
+    preview_event: threading.Event | None = None,
+):
+    """Run the webcam -> gesture -> action loop until stop_event is set
+    (or the 'q' key is pressed with the camera window focused, when run
+    standalone). Called by tray.py's Start/Stop toggle — each call loads
+    a fresh copy of the model and opens the webcam, and cleans both up
+    on exit."""
     model, id_to_label = load_model()
 
     cap = cv2.VideoCapture(0)
@@ -127,6 +142,7 @@ def main():
     prev_time = time.time()
 
     mode = "PyTorch LSTM model"
+    preview_visible = False
 
     with mp_hands.Hands(
         model_complexity=1,
@@ -138,6 +154,9 @@ def main():
         always_on_top_set = False
 
         while True:
+            if stop_event.is_set():
+                print("[main] Gesture engine stop requested.")
+                break
 
             ok, frame = cap.read()
             if not ok:
@@ -154,13 +173,15 @@ def main():
                 handedness = results.multi_handedness[0].classification[0].label
                 is_left_hand = (handedness == "Left")
 
-                mp_drawing.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    mp_hands.HAND_CONNECTIONS,
-                    mp_styles.get_default_hand_landmarks_style(),
-                    mp_styles.get_default_hand_connections_style(),
-                )
+                show_preview = preview_event is None or preview_event.is_set()
+                if show_preview:
+                    mp_drawing.draw_landmarks(
+                        frame,
+                        hand_landmarks,
+                        mp_hands.HAND_CONNECTIONS,
+                        mp_styles.get_default_hand_landmarks_style(),
+                        mp_styles.get_default_hand_connections_style(),
+                    )
 
                 # Append current frame to sliding window buffer
                 raw_buffer.append((hand_landmarks.landmark, is_left_hand))
@@ -215,32 +236,51 @@ def main():
                 if cooldown > 0:
                     cooldown -= 1
 
-            # FPS + mode overlay
+            # FPS + optional debug preview
             now = time.time()
             fps = 1.0 / max(now - prev_time, 1e-6)
             prev_time = now
 
-            cv2.putText(frame, f"Gesture: {gesture_name}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-            cv2.putText(frame, f"FPS: {fps:.1f}", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-            cv2.putText(frame, f"Mode: {mode}", (10, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 255), 1)
-            if cooldown > 0:
-                cv2.putText(frame, f"COOLDOWN ({cooldown})", (10, 120),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 1)
+            show_preview = preview_event is None or preview_event.is_set()
+            if show_preview:
+                cv2.putText(frame, f"Gesture: {gesture_name}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                cv2.putText(frame, f"FPS: {fps:.1f}", (10, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                cv2.putText(frame, f"Mode: {mode}", (10, 90),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 255), 1)
+                if cooldown > 0:
+                    cv2.putText(frame, f"COOLDOWN ({cooldown})", (10, 120),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 1)
 
-            cv2.imshow("Gesture Assistant (Phase 2 - PyTorch LSTM)", frame)
+                cv2.imshow(WINDOW_TITLE, frame)
+                preview_visible = True
 
-            if not always_on_top_set:
-                setup_always_on_top("Gesture Assistant (Phase 2 - PyTorch LSTM)")
-                always_on_top_set = True
+                if not always_on_top_set:
+                    setup_always_on_top(WINDOW_TITLE)
+                    always_on_top_set = True
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            elif preview_visible:
+                cv2.destroyWindow(WINDOW_TITLE)
+                cv2.waitKey(1)
+                preview_visible = False
+                always_on_top_set = False
 
     cap.release()
     cv2.destroyAllWindows()
+
+
+def main():
+    """Standalone runner for testing main.py directly, without the tray
+    icon or its start/stop control. Press 'q' (camera window focused) or
+    Ctrl+C to quit."""
+    stop_event = threading.Event()
+    try:
+        run_gesture_engine(stop_event)
+    except KeyboardInterrupt:
+        stop_event.set()
 
 
 if __name__ == "__main__":

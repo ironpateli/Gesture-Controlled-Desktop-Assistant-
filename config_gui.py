@@ -26,7 +26,8 @@ SCRIPT_EXTENSIONS = [
 
 ACTION_TYPES = [
     ("builtin", "Built-in action"),
-    ("app", "Launch an app"),
+    ("path", "Launch an app"),
+    ("uri", "Open a URI"),
     ("script", "Run a script"),
     ("hotkey", "Keyboard shortcut"),
 ]
@@ -131,15 +132,15 @@ class EditGestureDialog(tk.Toplevel):
     def __init__(self, parent, gesture_name: str, current_entry: dict, on_save):
         super().__init__(parent)
         self.title(f"Configure: {GESTURE_LABELS.get(gesture_name, gesture_name)}")
-        self.geometry("440x320")
-        self.minsize(400, 280)
+        self.geometry("440x390")
+        self.minsize(400, 340)
         self.configure(bg=COLOR_BG)
         self.transient(parent)
         self.grab_set()
 
         self.gesture_name = gesture_name
         self.on_save = on_save
-        self.selected_app_path = None
+        self.selected_app_path = current_entry.get("target") if current_entry.get("type") == "path" else None
         self.selected_script_path = current_entry.get("target") if current_entry.get("type") == "script" else None
         self.hotkey_keys = current_entry.get("target") if current_entry.get("type") == "hotkey" else None
 
@@ -193,8 +194,10 @@ class EditGestureDialog(tk.Toplevel):
         action_type = self.type_var.get()
         if action_type == "builtin":
             self._build_builtin_body()
-        elif action_type == "app":
+        elif action_type == "path":
             self._build_app_body()
+        elif action_type == "uri":
+            self._build_uri_body()
         elif action_type == "script":
             self._build_script_body()
         elif action_type == "hotkey":
@@ -231,9 +234,19 @@ class EditGestureDialog(tk.Toplevel):
                   bg=COLOR_ACCENT_BLUE, fg="white", relief="flat",
                   activebackground="#3651c9", cursor="hand2").pack(anchor="w", pady=4)
 
-        if self._current_entry.get("type") == "app" and current_label not in app_names:
-            self.selected_app_path = self._current_entry.get("target")
+        if self._current_entry.get("type") == "path" and current_label not in app_names:
             self.status_var.set(f"Currently: {self._current_entry.get('target', '')}")
+
+    def _build_uri_body(self):
+        tk.Label(
+            self.body_frame,
+            text="Enter a Windows or application URI (for example, spotify:):",
+            bg=COLOR_BG,
+            fg=COLOR_TEXT,
+        ).pack(anchor="w")
+        current_target = self._current_entry.get("target", "") if self._current_entry.get("type") == "uri" else ""
+        self.uri_var = tk.StringVar(value=current_target)
+        tk.Entry(self.body_frame, textvariable=self.uri_var).pack(fill="x", pady=6)
 
     def _browse_app(self):
         path = filedialog.askopenfilename(title="Choose an application", filetypes=[("Executables", "*.exe"), ("All files", "*.*")])
@@ -290,7 +303,7 @@ class EditGestureDialog(tk.Toplevel):
                 return
             entry = {"type": "builtin", "target": target, "label": label}
 
-        elif action_type == "app":
+        elif action_type == "path":
             chosen_name = self.app_var.get()
             if chosen_name in getattr(self, "_apps_by_name", {}):
                 path = self._apps_by_name[chosen_name]
@@ -302,6 +315,16 @@ class EditGestureDialog(tk.Toplevel):
                 messagebox.showerror("Error", "Pick an app or browse for one.")
                 return
             entry = {"type": "path", "target": path, "label": label}
+
+        elif action_type == "uri":
+            target = self.uri_var.get().strip()
+            if not target:
+                messagebox.showerror("Error", "Enter a URI first.")
+                return
+            current_label = self._current_entry.get("label")
+            current_target = self._current_entry.get("target")
+            label = current_label if current_label and target == current_target else target
+            entry = {"type": "uri", "target": target, "label": label}
 
         elif action_type == "script":
             source = getattr(self, "_pending_script_source", None) or self.selected_script_path

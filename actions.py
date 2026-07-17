@@ -39,11 +39,12 @@ import time
 import subprocess
 import pyautogui
 
+from app_paths import data_path
+
 pyautogui.FAILSAFE = True  # move mouse to screen corner to abort
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "gestures_config.json")
-SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")  # uploaded scripts land here (GUI phase)
+CONFIG_PATH = data_path("gestures_config.json")
+SCRIPTS_DIR = data_path("scripts")
 
 DEFAULT_CONFIG = {
     "thumbs_up":   {"type": "builtin", "target": "volume_up",   "label": "Volume Up"},

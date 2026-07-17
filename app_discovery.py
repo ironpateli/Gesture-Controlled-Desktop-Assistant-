@@ -20,8 +20,9 @@ import os
 import json
 import time
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_PATH = os.path.join(BASE_DIR, "app_cache.json")
+from app_paths import data_path
+
+CACHE_PATH = data_path("app_cache.json")
 CACHE_MAX_AGE_SECONDS = 60 * 60 * 24  # 1 day
 
 try:

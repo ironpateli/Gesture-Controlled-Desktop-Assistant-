@@ -20,9 +20,12 @@
     "label": "Play/Pause"
   },
   "swipe_left": {
-    "type": "path",
-    "target": "C:\\Program Files (x86)\\Steam\\steam.exe",
-    "label": "Steam"
+    "type": "hotkey",
+    "target": [
+      "alt",
+      "tab"
+    ],
+    "label": "alt+tab"
   },
   "swipe_right": {
     "type": "uri",

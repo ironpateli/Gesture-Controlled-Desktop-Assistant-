@@ -6,3 +6,8 @@ scikit-learn==1.5.1
 pandas==2.2.2
 joblib==1.4.2
 torch
+pystray==0.19.5
+Pillow
+pywin32
+protobuf==4.25.9
+pyinstaller==6.21.0

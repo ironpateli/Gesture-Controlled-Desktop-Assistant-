@@ -86,6 +86,81 @@ Since the resume was submitted before Phase 2 was finished, used this framing:
 
 ---
 
-## Phase 3 — Motion / temporal gestures (not started yet)
+## Phase 3 - Motion / temporal gestures with a PyTorch LSTM
 
-*(to be filled in)*
+### What changed
+
+- Replaced the single-frame MLP runtime with a PyTorch LSTM that consumes 20-frame landmark sequences.
+- Expanded the labels to nine classes: `none`, four static gestures, and four swipe directions.
+- Preserved wrist displacement across the sequence so motion remains visible to the model while keeping finger pose wrist-relative and scale-normalized.
+- Mirrored left-hand pose coordinates so one model can recognize either hand more consistently.
+- Added a confidence threshold of `0.8`; lower-confidence predictions become `none`.
+- Added gesture-specific cooldown behavior: short repeated firing for volume gestures and longer cooldowns with buffer clearing for discrete or motion gestures.
+- Saved the active checkpoint as `gesture_model.pth`, including model weights and label mappings. The older `gesture_model.pkl` is now a legacy artifact.
+
+### Current dataset
+
+The active CSV contains 1,387 recorded sequences:
+
+| Label | Sequences |
+|---|---:|
+| `none` | 484 |
+| `thumbs_up` | 62 |
+| `thumbs_down` | 63 |
+| `fist` | 95 |
+| `peace` | 80 |
+| `swipe_left` | 200 |
+| `swipe_right` | 131 |
+| `swipe_up` | 152 |
+| `swipe_down` | 120 |
+
+This is enough to exercise the full pipeline, but the class imbalance should be addressed before treating accuracy as a strong quality measure. Per-class precision/recall and the confusion matrix matter more than overall accuracy alone.
+
+### Desktop application layer
+
+- `tray.py` is now the main entry point and keeps the camera off until recognition is enabled.
+- `config_gui.py` edits `gestures_config.json` and supports the same action types as the dispatcher: built-in actions, executable paths, URIs, scripts, and hotkeys.
+- `app_discovery.py` scans Windows Start Menu shortcuts and caches resolved executable paths.
+- `setup_shortcuts.py` creates Desktop and Start Menu launchers and configures per-user auto-start. Development launchers use `pythonw.exe`; packaged launchers use `GestureAssistant.exe`.
+- The tray now provides a graceful Exit action and a camera-preview toggle. Hiding the preview leaves recognition active while skipping landmark drawing, overlays, and window rendering.
+- A named Windows mutex prevents duplicate tray processes, and an HKCU Run entry provides a user-controlled Start with Windows option without administrator privileges.
+- A PyInstaller one-folder build gives the process its own Task Manager name.
+- Packaged writable state lives under `%LOCALAPPDATA%\GestureAssistant` instead of the temporary PyInstaller resource directory.
+
+### Distribution checkpoint verified
+
+- The PyInstaller one-folder build launches successfully and appears as `GestureAssistant` in Task Manager.
+- Duplicate launch testing leaves the original process running and exits the second instance.
+- Desktop and Start Menu launchers, Start with Windows, URI/path editing, preview toggling, recognition controls, and clean Exit were confirmed in the real user session.
+- Lazy-loading `main.py` reduced packaged tray-only memory from roughly 244-255 MB to about 52 MB because Torch, OpenCV, and MediaPipe are not imported until recognition starts.
+- Development CPU measurements were approximately 1% with only the tray running and 3.5-3.7% while recognition was active, with little difference between no-hand and active-gesture scenes.
+
+### Packaging lessons
+
+- A Windows process launched through Python remains `python.exe`/`pythonw.exe` in Task Manager; producing a process named `GestureAssistant` requires a packaged executable with that name.
+- MediaPipe's `drawing_utils` imports Matplotlib. Excluding Matplotlib from the PyInstaller graph caused a packaged-only `ModuleNotFoundError`, even though the application does not call Matplotlib directly.
+- Windows Desktop folders may be redirected through OneDrive. Shortcut setup must ask Windows for the known Desktop folder instead of assuming `%USERPROFILE%\Desktop`.
+- Elevated automation may use a different Windows user hive. Startup registry and shortcut behavior must be finalized and verified from the actual user's session.
+
+### Dependency and configuration lessons
+
+- `requirements.txt` is the canonical dependency list for runtime, training, tray UI, and Windows integration.
+- `pywin32` is required for Start Menu shortcut resolution, shortcut creation, and the optional always-on-top integration.
+- Persisted configuration values and GUI control values must use the same vocabulary. The earlier editor offered `app` but saved `path`, and did not expose `uri`; reopening those entries produced a blank editor. The GUI now uses the dispatcher's actual type names.
+
+### Things I still need to be able to explain out loud
+
+- [ ] Why an LSTM can distinguish directional motion that a single-frame MLP cannot.
+- [ ] Why wrist motion must remain in the normalized sequence while finger pose is wrist-relative.
+- [ ] How class imbalance can make overall accuracy misleading.
+- [ ] Why a confidence threshold and a trained `none` class solve related but different false-trigger problems.
+- [ ] Why frame-based cooldowns vary with FPS and how a time-based cooldown would improve consistency.
+
+### Next steps
+
+1. Replace frame-based cooldowns with predictable time-based action control.
+2. Refine configurable media actions and the background movie/YouTube workflow.
+3. Measure packaged active CPU/memory use and reduce unnecessary runtime and bundle weight.
+4. Improve settings persistence, visible error reporting, upgrades, and installer behavior.
+5. Return to model work with balanced data, realistic hard negatives, session-based evaluation, and false-positive tuning.
+6. Move duplicated normalization and `GestureLSTM` definitions into shared modules before the next training cycle so collection, training, and inference cannot drift.
