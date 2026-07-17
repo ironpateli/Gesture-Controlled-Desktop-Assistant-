@@ -47,14 +47,14 @@ CONFIG_PATH = data_path("gestures_config.json")
 SCRIPTS_DIR = data_path("scripts")
 
 DEFAULT_CONFIG = {
-    "thumbs_up":   {"type": "builtin", "target": "volume_up",   "label": "Volume Up"},
-    "thumbs_down": {"type": "builtin", "target": "volume_down", "label": "Volume Down"},
-    "fist":        {"type": "builtin", "target": "mute",        "label": "Mute Toggle"},
-    "peace":       {"type": "builtin", "target": "play_pause",  "label": "Play/Pause"},
-    "swipe_left":  {"type": "builtin", "target": "prev_tab",    "label": "Previous Tab"},
-    "swipe_right": {"type": "uri",     "target": "spotify:",    "label": "Spotify"},
-    "swipe_up":    {"type": "uri",     "target": "ms-settings:","label": "Settings"},
-    "swipe_down":  {"type": "builtin", "target": "scroll_down", "label": "Scroll Down"},
+    "thumbs_up":   {"type": "builtin", "target": "volume_up",    "label": "Volume Up",    "enabled": True},
+    "thumbs_down": {"type": "builtin", "target": "volume_down",  "label": "Volume Down",  "enabled": True},
+    "fist":        {"type": "builtin", "target": "mute",         "label": "Mute Toggle",  "enabled": True},
+    "peace":       {"type": "builtin", "target": "play_pause",   "label": "Play/Pause",   "enabled": True},
+    "swipe_left":  {"type": "hotkey",  "target": ["j"], "label": "Rewind 10 Seconds",  "enabled": True},
+    "swipe_right": {"type": "hotkey",  "target": ["l"], "label": "Forward 10 Seconds", "enabled": True},
+    "swipe_up":    {"type": "hotkey",  "target": ["f"], "label": "Fullscreen Toggle",  "enabled": True},
+    "swipe_down":  {"type": "hotkey",  "target": ["c"], "label": "Captions Toggle",    "enabled": True},
 }
 
 # The fixed set of gestures the model recognizes. config_gui.py builds its
@@ -284,12 +284,25 @@ def save_config(config: dict):
 # DISPATCH
 # ============================================================
 
-def dispatch(gesture_name: str):
-    config = load_config()
-    entry = config.get(gesture_name)
+def get_action_entry(gesture_name: str) -> dict:
+    """Return the latest configured action for a gesture."""
+    return load_config().get(gesture_name)
+
+
+def is_gesture_enabled(entry: dict) -> bool:
+    """Older config entries have no flag and remain enabled by default."""
+    return bool(entry.get("enabled", True))
+
+
+def dispatch(gesture_name: str, entry: dict = None):
+    if entry is None:
+        entry = get_action_entry(gesture_name)
 
     if not entry:
         print(f"[dispatch] No action configured for gesture: '{gesture_name}'")
+        return
+    if not is_gesture_enabled(entry):
+        print(f"[dispatch] Gesture disabled: '{gesture_name}'")
         return
 
     action_type = entry.get("type")

@@ -1,16 +1,16 @@
 """
 main.py
 
-Camera engine: webcam -> MediaPipe landmarks -> trained PyTorch LSTM
-classifier (gesture_model.pth from train_classifier.py) -> custom
-debounce -> OS action.
+Camera engine: webcam -> MediaPipe landmarks -> LSTM inference through
+the lightweight NumPy runtime exported from the PyTorch training
+checkpoint -> custom debounce -> OS action.
 
 This module no longer runs on its own by default — tray.py is the
 entry point. The tray icon starts/stops run_gesture_engine() below on
 demand, so the camera only turns on when you actually want it to.
 
-Requires gesture_model.pth to be present — there is no rule-based fallback.
-Run this from the same directory as your trained gesture_model.pth.
+Requires gesture_model_runtime.npz to be present. There is no rule-based
+fallback. Run export_runtime_model.py after retraining the PyTorch model.
 
 To run the camera loop standalone for testing (no tray icon, no
 start/stop control — just Ctrl+C or 'q' to quit):
@@ -25,37 +25,24 @@ import math
 import warnings
 import cv2
 import numpy as np
-import torch
-import torch.nn as nn
 import mediapipe as mp
 
-from actions import dispatch, setup_always_on_top
+from actions import dispatch, get_action_entry, setup_always_on_top
+from action_timing import GestureActionGate, MOTION_GESTURES
 from app_paths import resource_path
+from runtime_model import NumpyGestureLSTM
 
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 mp_styles = mp.solutions.drawing_styles
 
-MODEL_PATH = resource_path("gesture_model.pth")
+MODEL_PATH = resource_path("gesture_model_runtime.npz")
 SEQ_LEN = 20
 INPUT_SIZE = 63
 CONFIDENCE_THRESHOLD = 0.8  # Predictions below this are auto-classified as 'none'
-WINDOW_TITLE = "Gesture Assistant (Phase 2 - PyTorch LSTM)"
-
-
-class GestureLSTM(nn.Module):
-    def __init__(self, input_size=63, hidden_size=64, num_classes=9, num_layers=1):
-        super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, num_classes)
-
-    def forward(self, x):
-        # x shape: (batch_size, seq_len, input_size)
-        out, _ = self.lstm(x)
-        # Pass the output of the last time step through the linear layer
-        out = self.fc(out[:, -1, :])
-        return out
+GESTURE_LABEL_HOLD_SECONDS = 1.5
+WINDOW_TITLE = "Gesture Assistant"
 
 
 def calculate_scale_factor(landmarks_0):
@@ -96,41 +83,29 @@ def normalize_sequence_frame(landmarks, wrist_0, scale_factor, is_left_hand=Fals
 
 
 def load_model():
-    """Load the trained PyTorch LSTM model. Raises if it can't be found or
-    loaded — there is no rule-based fallback, so a valid model is required."""
+    """Load the exported NumPy LSTM runtime model."""
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(
-            f"[main] No model found at {MODEL_PATH}. Place your trained "
-            f"gesture_model.pth next to main.py before running."
+            f"[main] No runtime model found at {MODEL_PATH}. Run "
+            f"export_runtime_model.py after training."
         )
 
-    checkpoint = torch.load(MODEL_PATH)
-    label_to_id = checkpoint['label_to_id']
-    id_to_label = checkpoint['id_to_label']
-    num_classes = len(label_to_id)
-
-    model = GestureLSTM(
-        input_size=INPUT_SIZE,
-        hidden_size=checkpoint.get('hidden_size', 64),
-        num_classes=num_classes,
-        num_layers=checkpoint.get('num_layers', 1)
-    )
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-    print(f"[main] Loaded trained PyTorch LSTM model from {MODEL_PATH}")
-    return model, id_to_label
+    model = NumpyGestureLSTM(MODEL_PATH)
+    print(f"[main] Loaded lightweight LSTM runtime from {MODEL_PATH}")
+    return model
 
 
 def run_gesture_engine(
     stop_event: threading.Event,
     preview_event: threading.Event | None = None,
+    ready_callback=None,
 ):
     """Run the webcam -> gesture -> action loop until stop_event is set
     (or the 'q' key is pressed with the camera window focused, when run
     standalone). Called by tray.py's Start/Stop toggle — each call loads
     a fresh copy of the model and opens the webcam, and cleans both up
     on exit."""
-    model, id_to_label = load_model()
+    model = load_model()
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -138,11 +113,13 @@ def run_gesture_engine(
 
     # raw_buffer stores: (landmarks, is_left_hand)
     raw_buffer = collections.deque(maxlen=SEQ_LEN)
-    cooldown = 0
-    prev_time = time.time()
+    action_gate = GestureActionGate()
+    prev_time = time.monotonic()
 
-    mode = "PyTorch LSTM model"
+    mode = "LSTM model (NumPy runtime)"
     preview_visible = False
+    displayed_gesture = "none"
+    displayed_gesture_until = 0.0
 
     with mp_hands.Hands(
         model_complexity=1,
@@ -150,7 +127,9 @@ def run_gesture_engine(
         min_detection_confidence=0.7,
         min_tracking_confidence=0.6,
     ) as hands:
-        
+        if ready_callback is not None:
+            ready_callback()
+
         always_on_top_set = False
 
         while True:
@@ -186,10 +165,7 @@ def run_gesture_engine(
                 # Append current frame to sliding window buffer
                 raw_buffer.append((hand_landmarks.landmark, is_left_hand))
 
-                if cooldown > 0:
-                    cooldown -= 1
-                    gesture_name = "none"
-                elif len(raw_buffer) == SEQ_LEN:
+                if len(raw_buffer) == SEQ_LEN:
                     # Reconstruct sliding sequence normalized to raw_buffer[0]
                     landmarks_0, is_left_0 = raw_buffer[0]
                     wrist_0 = landmarks_0[0]
@@ -202,55 +178,49 @@ def run_gesture_engine(
                         )
                         normalized_seq.append(flat_frame)
 
-                    # Predict using LSTM
-                    tensor_in = torch.tensor([normalized_seq], dtype=torch.float32)
-                    with torch.no_grad():
-                        outputs = model(tensor_in)
-                        probs = torch.softmax(outputs, dim=1)
-                        confidence, pred_id = torch.max(probs, dim=1)
-                        if confidence.item() >= CONFIDENCE_THRESHOLD:
-                            gesture_name = id_to_label[pred_id.item()]
-                        else:
-                            gesture_name = "none"  # below threshold, reject
+                    gesture_name, confidence = model.predict(normalized_seq)
+                    if confidence < CONFIDENCE_THRESHOLD:
+                        gesture_name = "none"  # below threshold, reject
 
-                    # Dispatch Action with Custom Cooldowns
+                    now = time.monotonic()
                     if gesture_name != "none":
-                        # Continuous static gestures (Thumbs Up / Down for Volume)
-                        if gesture_name in ("thumbs_up", "thumbs_down"):
-                            dispatch(gesture_name)
-                            cooldown = 4  # Short cooldown to allow continuous smooth trigger
+                        displayed_gesture = gesture_name
+                        displayed_gesture_until = now + GESTURE_LABEL_HOLD_SECONDS
 
-                        # Discrete static gestures (Mute, Play/Pause)
-                        elif gesture_name in ("fist", "peace"):
-                            dispatch(gesture_name)
-                            cooldown = 30  # Medium cooldown (~0.5s)
-                            raw_buffer.clear()  # Clear buffer to prevent double-firing
-
-                        # Dynamic motion gestures (Swiping / Scrolling)
-                        elif gesture_name in ("swipe_left", "swipe_right", "swipe_up", "swipe_down"):
-                            dispatch(gesture_name)
-                            cooldown = 30  # 0.6s repositioning cooldown
-                            raw_buffer.clear()  # Discard old swipe frames to prevent double-firing
+                    if gesture_name == "none":
+                        action_gate.observe("none", now)
+                    else:
+                        action_entry = get_action_entry(gesture_name)
+                        if action_gate.should_fire(gesture_name, action_entry, now):
+                            dispatch(gesture_name, action_entry)
+                            if gesture_name in MOTION_GESTURES:
+                                raw_buffer.clear()
             else:
                 raw_buffer.clear()
-                if cooldown > 0:
-                    cooldown -= 1
+                action_gate.hand_left_frame()
 
             # FPS + optional debug preview
-            now = time.time()
+            now = time.monotonic()
             fps = 1.0 / max(now - prev_time, 1e-6)
             prev_time = now
 
             show_preview = preview_event is None or preview_event.is_set()
             if show_preview:
-                cv2.putText(frame, f"Gesture: {gesture_name}", (10, 30),
+                preview_gesture = (
+                    displayed_gesture if now < displayed_gesture_until else "none"
+                )
+                cv2.putText(frame, f"Gesture: {preview_gesture}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
                 cv2.putText(frame, f"FPS: {fps:.1f}", (10, 60),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
                 cv2.putText(frame, f"Mode: {mode}", (10, 90),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 255), 1)
-                if cooldown > 0:
-                    cv2.putText(frame, f"COOLDOWN ({cooldown})", (10, 120),
+                cooldown_remaining = action_gate.cooldown_remaining(gesture_name, now)
+                if action_gate.waiting_for_release(gesture_name):
+                    cv2.putText(frame, "RELEASE TO REARM", (10, 120),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 1)
+                elif cooldown_remaining > 0:
+                    cv2.putText(frame, f"COOLDOWN ({cooldown_remaining:.1f}s)", (10, 120),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 1)
 
                 cv2.imshow(WINDOW_TITLE, frame)

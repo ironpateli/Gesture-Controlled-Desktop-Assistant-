@@ -95,7 +95,7 @@ Since the resume was submitted before Phase 2 was finished, used this framing:
 - Preserved wrist displacement across the sequence so motion remains visible to the model while keeping finger pose wrist-relative and scale-normalized.
 - Mirrored left-hand pose coordinates so one model can recognize either hand more consistently.
 - Added a confidence threshold of `0.8`; lower-confidence predictions become `none`.
-- Added gesture-specific cooldown behavior: short repeated firing for volume gestures and longer cooldowns with buffer clearing for discrete or motion gestures.
+- Initially added frame-count gesture cooldowns, then replaced them with monotonic time deadlines so behavior no longer changes with webcam FPS.
 - Saved the active checkpoint as `gesture_model.pth`, including model weights and label mappings. The older `gesture_model.pkl` is now a legacy artifact.
 
 ### Current dataset
@@ -122,7 +122,9 @@ This is enough to exercise the full pipeline, but the class imbalance should be 
 - `config_gui.py` edits `gestures_config.json` and supports the same action types as the dispatcher: built-in actions, executable paths, URIs, scripts, and hotkeys.
 - `app_discovery.py` scans Windows Start Menu shortcuts and caches resolved executable paths.
 - `setup_shortcuts.py` creates Desktop and Start Menu launchers and configures per-user auto-start. Development launchers use `pythonw.exe`; packaged launchers use `GestureAssistant.exe`.
-- The tray now provides a graceful Exit action and a camera-preview toggle. Hiding the preview leaves recognition active while skipping landmark drawing, overlays, and window rendering.
+- The tray now provides a graceful Exit action and a camera-preview toggle. Hiding the preview leaves recognition active while skipping landmark drawing, overlays, and window rendering. The last confident label remains visible for `1.5` seconds so brief predictions are readable without changing action timing.
+- The tray sends only lifecycle notifications: recognition ready, user-requested stop, and startup/runtime errors. Gesture detections and actions remain silent.
+- Each configured gesture can be enabled or disabled independently. Disabling blocks dispatch without changing or retraining the model, and old configuration files remain enabled by default.
 - A named Windows mutex prevents duplicate tray processes, and an HKCU Run entry provides a user-controlled Start with Windows option without administrator privileges.
 - A PyInstaller one-folder build gives the process its own Task Manager name.
 - Packaged writable state lives under `%LOCALAPPDATA%\GestureAssistant` instead of the temporary PyInstaller resource directory.
@@ -134,6 +136,9 @@ This is enough to exercise the full pipeline, but the class imbalance should be 
 - Desktop and Start Menu launchers, Start with Windows, URI/path editing, preview toggling, recognition controls, and clean Exit were confirmed in the real user session.
 - Lazy-loading `main.py` reduced packaged tray-only memory from roughly 244-255 MB to about 52 MB because Torch, OpenCV, and MediaPipe are not imported until recognition starts.
 - Development CPU measurements were approximately 1% with only the tray running and 3.5-3.7% while recognition was active, with little difference between no-hand and active-gesture scenes.
+- The distribution runtime now evaluates the trained LSTM with NumPy instead of importing PyTorch. Parity testing on 25 recorded sequences produced identical classes with a maximum logit difference of `0.00000191`.
+- Removing PyTorch and optional MediaPipe dependency trees reduced the packaged folder from about 1.06 GB to approximately 321 MB. Tray-only memory dropped again from about 52 MB to 31-33 MB.
+- Packaged user-session testing verified time-based cooldowns, action-category timing, lifecycle notifications, live per-gesture enable/disable changes, and the readable preview-label hold.
 
 ### Packaging lessons
 
@@ -141,12 +146,20 @@ This is enough to exercise the full pipeline, but the class imbalance should be 
 - MediaPipe's `drawing_utils` imports Matplotlib. Excluding Matplotlib from the PyInstaller graph caused a packaged-only `ModuleNotFoundError`, even though the application does not call Matplotlib directly.
 - Windows Desktop folders may be redirected through OneDrive. Shortcut setup must ask Windows for the known Desktop folder instead of assuming `%USERPROFILE%\Desktop`.
 - Elevated automation may use a different Windows user hive. Startup registry and shortcut behavior must be finalized and verified from the actual user's session.
+- A small trained model does not imply a small package when its full training framework is bundled. Separating training from inference removed hundreds of megabytes without retraining or changing predictions.
+- Application binaries and writable settings need separate lifecycles. The installer places binaries under `%LOCALAPPDATA%\Programs\Gesture Assistant`, while gesture mappings live under `%LOCALAPPDATA%\GestureAssistant`; reinstalling the executable must not erase a user's configuration.
+- Installer `0.1.1` replaced legacy Desktop and Start Menu shortcuts after an older shortcut resolved to a development executable. The installer now deletes old links and recreates them with the actual installation directory as both target and working directory.
+- A private beta can be shared as one Inno Setup executable through Google Drive. The SHA-256 value is a deterministic fingerprint for detecting a changed or corrupted download; the installer itself remains outside normal Git history.
+- After publishing a recovery checkpoint, generated `build`/`dist` output, the superseded installer, caches, and personal runtime configuration were removed from the workspace. Legacy Phase 1 code and weights were moved under `archive/phase1`, while the LSTM baseline image was retained under `docs/assets` for future model comparisons.
 
 ### Dependency and configuration lessons
 
 - `requirements.txt` is the canonical dependency list for runtime, training, tray UI, and Windows integration.
 - `pywin32` is required for Start Menu shortcut resolution, shortcut creation, and the optional always-on-top integration.
 - Persisted configuration values and GUI control values must use the same vocabulary. The earlier editor offered `app` but saved `path`, and did not expose `uri`; reopening those entries produced a blank editor. The GUI now uses the dispatcher's actual type names.
+- `time.monotonic()` is the correct clock for cooldown deadlines because it measures elapsed time and is unaffected by wall-clock adjustments.
+- Cooldown behavior belongs to both the gesture and its configured action. Motion gestures receive a repositioning interval, while paths, URIs, and scripts receive a longer launch interval even when assigned to a swipe.
+- Feature flags in persisted config need a backward-compatible default. Treating a missing `enabled` field as `true` preserves every existing user's behavior.
 
 ### Things I still need to be able to explain out loud
 
@@ -154,13 +167,12 @@ This is enough to exercise the full pipeline, but the class imbalance should be 
 - [ ] Why wrist motion must remain in the normalized sequence while finger pose is wrist-relative.
 - [ ] How class imbalance can make overall accuracy misleading.
 - [ ] Why a confidence threshold and a trained `none` class solve related but different false-trigger problems.
-- [ ] Why frame-based cooldowns vary with FPS and how a time-based cooldown would improve consistency.
+- [x] Why frame-based cooldowns vary with FPS and why monotonic time makes action behavior predictable.
 
 ### Next steps
 
-1. Replace frame-based cooldowns with predictable time-based action control.
-2. Refine configurable media actions and the background movie/YouTube workflow.
-3. Measure packaged active CPU/memory use and reduce unnecessary runtime and bundle weight.
-4. Improve settings persistence, visible error reporting, upgrades, and installer behavior.
-5. Return to model work with balanced data, realistic hard negatives, session-based evaluation, and false-positive tuning.
-6. Move duplicated normalization and `GestureLSTM` definitions into shared modules before the next training cycle so collection, training, and inference cannot drift.
+1. Refine configurable media actions and the background movie/YouTube workflow.
+2. Measure packaged active CPU/memory use and reduce unnecessary runtime work where measurements justify it.
+3. Return to model work with balanced data, realistic hard negatives, session-based evaluation, and false-positive tuning.
+4. Improve settings persistence, upgrades, and installer behavior.
+5. Move duplicated normalization and `GestureLSTM` definitions into shared modules before the next training cycle so collection, training, and inference cannot drift.
